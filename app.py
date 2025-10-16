@@ -1,9 +1,11 @@
 # ✅ STEP 1: Fix for Python 3.13 (audioop removed)
+# ✅ CORRECT CODE
 import sys
 try:
     import audioop
 except ModuleNotFoundError:
-    import pyaudioop as audioop
+    # Import pyaudioop from the pydub library
+    from pydub import pyaudioop as audioop
     sys.modules["audioop"] = audioop
 
 # ✅ STEP 2: Imports

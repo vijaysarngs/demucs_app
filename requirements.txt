@@ -4,3 +4,4 @@ torchaudio
 pydub
 demucs
 ffmpeg-python
+pyaudioop

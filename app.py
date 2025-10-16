@@ -1,4 +1,12 @@
-# app.py
+# ✅ STEP 1: Fix for Python 3.13 (audioop removed)
+import sys
+try:
+    import audioop
+except ModuleNotFoundError:
+    import pyaudioop as audioop
+    sys.modules["audioop"] = audioop
+
+# ✅ STEP 2: Imports
 import torch
 import torchaudio
 from demucs.pretrained import get_model
@@ -7,44 +15,66 @@ from pydub import AudioSegment
 import numpy as np
 import os
 from flask import Flask, request, jsonify, send_file
+import tempfile
 
+# ✅ Flask app setup
 app = Flask(__name__)
 
-# Load Demucs model once at startup
-model = get_model('htdemucs')
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model.to(device)
-
+# ✅ STEP 3: Audio loader using PyDub
 def load_audio_pydub(file_path, target_sr=44100):
     audio = AudioSegment.from_file(file_path)
     audio = audio.set_frame_rate(target_sr).set_channels(2)
     samples = np.array(audio.get_array_of_samples()).astype(np.float32)
-    samples = samples.reshape(-1, 2).T
+    samples = samples.reshape(-1, 2).T  # [channels, samples]
     samples /= np.iinfo(audio.array_type).max
     return torch.from_numpy(samples), target_sr
 
-@app.route("/")
-def home():
-    return jsonify({"message": "Demucs API is running!"})
+# ✅ STEP 4: Load Demucs model once
+print("🔹 Loading Demucs model...")
+model = get_model('htdemucs')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+print(f"✅ Model loaded on {device}")
 
-@app.route("/separate", methods=["POST"])
+# ✅ STEP 5: API route
+@app.route('/separate', methods=['POST'])
 def separate_audio():
-    # Expect an uploaded mp3 file
-    if "file" not in request.files:
-        return jsonify({"error": "No file provided"}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
 
-    file = request.files["file"]
-    filename = "input.mp3"
-    file.save(filename)
+    file = request.files['file']
 
-    waveform, sr = load_audio_pydub(filename)
-    sources = apply_model(model, waveform.unsqueeze(0), device=device, shifts=1, split=True, overlap=0.25)[0]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+        file.save(tmp.name)
+        input_path = tmp.name
 
-    os.makedirs("outputs", exist_ok=True)
-    vocal_path = os.path.join("outputs", "vocals.wav")
-    torchaudio.save(vocal_path, sources[3], sr)
+    print(f"🎧 Received file: {input_path}")
+    waveform, sr = load_audio_pydub(input_path)
 
-    return send_file(vocal_path, as_attachment=True)
+    print("🔹 Running separation...")
+    sources = apply_model(model, waveform.unsqueeze(0).to(device),
+                          device=device, shifts=1, split=True, overlap=0.25)[0]
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    output_dir = tempfile.mkdtemp()
+    stems = ['drums', 'bass', 'other', 'vocals']
+    output_paths = {}
+
+    for idx, name in enumerate(stems):
+        output_path = os.path.join(output_dir, f"{name}.wav")
+        torchaudio.save(output_path, sources[idx].cpu(), sr)
+        output_paths[name] = output_path
+        print(f"✅ Saved {name} stem")
+
+    return jsonify({
+        "message": "Separation complete!",
+        "stems": list(output_paths.keys())
+    })
+
+# ✅ Health check route
+@app.route('/')
+def home():
+    return jsonify({'message': 'Demucs separation API is live 🎶'})
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
